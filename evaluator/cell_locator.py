@@ -1,138 +1,182 @@
+import re
 import tkinter as tk
-from tkinter import filedialog, messagebox
-import pandas as pd
+from tkinter import filedialog, messagebox, ttk
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, column_index_from_string
 
-# --- Funciones de mapeo de actividades ---
-
-def build_activity_mapping(file_path, sheet_name="EVALUACIÓN",
-                           merged_header_text="RESULTADO APRENDIZAJE-CRITERIO DE EVALUACIÓN PRÁCTICOS",
-                           header_rows=(7, 8), activity_row=9):
+def build_activity_mapping(file_path,
+                           sheet_name="EVALUACIÓN",
+                           header_text="RESULTADO APRENDIZAJE-CRITERIO DE EVALUACIÓN PRÁCTICOS",
+                           activity_row=9,
+                           student_col="C",
+                           start_student_row=10):
     """
-    Abre el archivo Excel y recorre los rangos combinados en las filas de encabezado (header_rows)
-    que contienen el texto especificado en merged_header_text.
-    Para cada bloque encontrado, extrae de la fila activity_row los nombres de las actividades
-    y construye un diccionario en el que cada actividad se asocia a una lista de referencias de celda.
-    Por ejemplo: { "1 h": ["AC9", "AE9"], "1K": ["AD9"] }
+    Crea un mapeo que asocia cada tarea a la(s) columna(s) donde aparece,
+    normalizando el nombre para que "TAREA X" y "ACTIVIDAD X" se traten igual.
+    Retorna:
+      - mapping: Diccionario del tipo {"TAREA 1": ["D9", "L9", "S9"], ...}
+      - find_student_row: Función que, dado el nombre de un alumno, retorna la fila en la que se encuentra.
+      - get_grade_cell: Función que, dada una tarea, un alumno y un índice de trimestre, retorna la referencia de la celda donde se debe insertar la nota.
     """
+    # Cargar el workbook en modo data_only para obtener los valores evaluados (no las fórmulas)
     wb = load_workbook(file_path, data_only=True)
     ws = wb[sheet_name]
-    mapping = {}
 
+    # 1. Detectar bloques de celdas combinadas que contengan el header_text
+    merged_ranges = []
     for merged_range in ws.merged_cells.ranges:
-        min_row = merged_range.min_row
-        max_row = merged_range.max_row
-        min_col = merged_range.min_col
-        max_col = merged_range.max_col
+        top_left_value = ws.cell(row=merged_range.min_row, column=merged_range.min_col).value
+        if top_left_value and header_text.lower() in str(top_left_value).lower():
+            merged_ranges.append(merged_range)
 
-        # Verificamos que el rango abarque las filas de encabezado definidas (7 y 8)
-        if min_row == header_rows[0] and max_row == header_rows[1]:
-            header_value = ws.cell(row=min_row, column=min_col).value
-            if header_value and merged_header_text.lower() in str(header_value).lower():
-                # Se ha identificado un bloque de actividades; recorremos cada columna de este bloque
-                for col in range(min_col, max_col + 1):
-                    cell = ws.cell(row=activity_row, column=col)
-                    if cell.value is not None:
-                        activity_name = str(cell.value).strip()
-                        cell_ref = f"{get_column_letter(col)}{activity_row}"
-                        # Si la tarea ya existe en el mapeo, se añade la referencia a la lista;
-                        # de lo contrario, se crea una nueva entrada.
-                        if activity_name in mapping:
-                            mapping[activity_name].append(cell_ref)
-                        else:
-                            mapping[activity_name] = [cell_ref]
-    return mapping
+    # 2. Recorrer cada bloque para identificar las columnas en la fila de actividades que contengan "TAREA [X]" o "ACTIVIDAD [X]"
+    mapping = {}
+    for rng in merged_ranges:
+        for col in range(rng.min_col, rng.max_col + 1):
+            cell_value = ws.cell(row=activity_row, column=col).value
+            if cell_value:
+                match = re.search(r"(tarea|actividad)\s*(\d+)", str(cell_value), re.IGNORECASE)
+                if match:
+                    task_number = match.group(2)
+                    # Normalizamos el nombre a "TAREA X"
+                    task_name = f"TAREA {task_number}"
+                    col_letter = get_column_letter(col)
+                    if task_name not in mapping:
+                        mapping[task_name] = []
+                    mapping[task_name].append(f"{col_letter}{activity_row}")
 
-# --- Función para encontrar la fila del alumno usando pandas ---
+    # Ordenar las referencias para cada tarea en orden ascendente por columna
+    for task in mapping:
+        mapping[task].sort(key=lambda cell: column_index_from_string(''.join(ch for ch in cell if ch.isalpha())))
 
-def find_student_row(file_path, student_name, sheet_name="EVALUACIÓN"):
-    """
-    Busca la fila en la que se encuentra el alumno.
-    Se asume que los nombres están en la columna C (índice 2, 0-indexado) a partir de la fila 10.
-    Devuelve el número de fila (1-indexado) tal como aparece en el Excel.
-    """
-    try:
-        # Leer el Excel sin interpretar filas como encabezado
-        df = pd.read_excel(file_path, sheet_name=sheet_name, engine="openpyxl", header=None)
-    except Exception as e:
+    # 3. Función interna para encontrar la fila de un alumno (se asume que los nombres están en la columna 'student_col')
+    def find_student_row(alumno):
+        print(f"[DEBUG] Buscando alumno: '{alumno}'")
+        for row in range(start_student_row, ws.max_row + 1):
+            cell_value = ws[f"{student_col}{row}"].value
+            print(f"[DEBUG] Fila {row}, valor: {cell_value}")
+            if cell_value and alumno.lower() in str(cell_value).lower():
+                print(f"[DEBUG] Alumno encontrado en la fila {row}")
+                return row
+        print("[DEBUG] Alumno no encontrado")
         return None
 
-    # Iteramos desde la fila 10 (índice 9 en pandas, 0-indexado)
-    for idx in range(9, len(df)):
-        cell_value = df.iloc[idx, 2]
-        if cell_value is not None and str(cell_value).strip().lower() == student_name.strip().lower():
-            # Sumamos 1 para convertir el índice 0-indexado en número de fila real del Excel
-            return idx + 1
-    return None
+    # 4. Función para obtener la referencia de la celda donde se colocará la nota,
+    #    considerando el índice de trimestre (0 para el primero, 1 para el segundo, etc.)
+    def get_grade_cell(alumno, tarea, trimester_index=0):
+        if tarea not in mapping:
+            return None
+        cell_refs = mapping[tarea]
+        if len(cell_refs) > trimester_index:
+            selected_ref = cell_refs[trimester_index]
+        else:
+            selected_ref = cell_refs[0]
+        col_letters = "".join([ch for ch in selected_ref if ch.isalpha()])
+        row_alumno = find_student_row(alumno)
+        if not row_alumno:
+            return None
+        return f"{col_letters}{row_alumno}"
 
-# --- Función para verificar la correspondencia alumno-tarea-nota ---
+    return mapping, find_student_row, get_grade_cell
 
-def verify_grade_for_student():
-    """
-    Para el alumno y la tarea especificados en la interfaz:
-      1. Busca la fila del alumno.
-      2. Obtiene la(s) columna(s) asociada(s) a la tarea a través del mapeo.
-      3. Construye la referencia de celda (reemplazando la fila del header por la del alumno).
-      4. Lee el valor actual de esa celda y lo muestra.
-    """
-    file_path = entry_file_path.get().strip()
-    student = entry_student.get().strip()
-    task = entry_task.get().strip()
 
-    if not file_path or not student or not task:
-        messagebox.showerror("Error", "Por favor, ingrese la ruta del archivo, el alumno y la tarea.")
-        return
+# Interfaz gráfica con Tkinter
+class GradingGUI(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Gestión de Calificaciones")
+        self.geometry("650x450")
+        self.file_path = None
+        self.mapping = None
+        self.find_student_row = None
+        self.get_grade_cell = None
 
-    mapping = build_activity_mapping(file_path)
-    if task not in mapping:
-        messagebox.showerror("Error", f"La tarea '{task}' no se encuentra en el mapeo.")
-        return
+        self.create_widgets()
 
-    student_row = find_student_row(file_path, student)
-    if student_row is None:
-        messagebox.showerror("Error", f"Alumno '{student}' no encontrado.")
-        return
+    def create_widgets(self):
+        frame = ttk.Frame(self, padding=20)
+        frame.pack(fill=tk.BOTH, expand=True)
 
-    # Abrir el libro para leer el valor de la celda
-    wb = load_workbook(file_path, data_only=True)
-    ws = wb["EVALUACIÓN"]
+        # Selección de archivo
+        ttk.Label(frame, text="Archivo Excel:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        self.entry_file = ttk.Entry(frame, width=50)
+        self.entry_file.grid(row=0, column=1, padx=5, pady=5)
+        ttk.Button(frame, text="Examinar", command=self.load_file).grid(row=0, column=2, padx=5, pady=5)
 
-    results = f"Verificación para alumno '{student}', tarea '{task}':\n\n"
-    # mapping[task] es una lista de celdas de la fila de cabecera (por ejemplo, ["AC9", "AD9"])
-    for cell_ref in mapping[task]:
-        # Extraemos la parte de la columna (letras) del cell_ref
-        col_letter = ''.join([ch for ch in cell_ref if ch.isalpha()])
-        # Construimos la celda para el alumno usando la fila encontrada
-        student_cell = f"{col_letter}{student_row}"
-        cell_value = ws[student_cell].value
-        results += f"Celda {student_cell}: Valor actual -> {cell_value}\n"
+        # Entrada para nombre del alumno
+        ttk.Label(frame, text="Nombre del Alumno:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        self.entry_student = ttk.Entry(frame, width=40)
+        self.entry_student.grid(row=1, column=1, padx=5, pady=5)
 
-    messagebox.showinfo("Verificación de Nota", results)
+        # Combobox para seleccionar la tarea (se llena al cargar el archivo)
+        ttk.Label(frame, text="Tarea:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
+        self.combo_task = ttk.Combobox(frame, state="readonly", width=38)
+        self.combo_task.grid(row=2, column=1, padx=5, pady=5)
 
-# --- Interfaz Gráfica con Tkinter ---
+        # Selector de trimestre
+        ttk.Label(frame, text="Trimestre:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
+        self.combo_trimester = ttk.Combobox(frame, values=["1T", "2T", "3T"], state="readonly", width=10)
+        self.combo_trimester.current(0)  # Por defecto "1T"
+        self.combo_trimester.grid(row=3, column=1, sticky=tk.W, padx=5, pady=5)
 
-root = tk.Tk()
-root.title("Verificar Correspondencia Alumno-Tarea-Nota")
+        # Botón para buscar la celda de la nota
+        ttk.Button(frame, text="Buscar Celda", command=self.search_cell).grid(row=4, column=1, pady=10)
 
-# Selección del archivo Excel
-tk.Label(root, text="Ruta del archivo Excel:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-entry_file_path = tk.Entry(root, width=50)
-entry_file_path.grid(row=0, column=1, padx=5, pady=5)
-tk.Button(root, text="Seleccionar Archivo", command=lambda:
-          entry_file_path.insert(0, filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")]))).grid(row=0, column=2, padx=5, pady=5)
+        # Área de salida
+        self.text_output = tk.Text(frame, height=10, width=70)
+        self.text_output.grid(row=5, column=0, columnspan=3, padx=5, pady=5)
 
-# Entrada para el nombre del alumno
-tk.Label(root, text="Nombre del Alumno:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-entry_student = tk.Entry(root, width=30)
-entry_student.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+    def load_file(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
+        if file_path:
+            self.file_path = file_path
+            self.entry_file.delete(0, tk.END)
+            self.entry_file.insert(0, file_path)
+            try:
+                # Construir el mapeo y obtener las funciones auxiliares
+                self.mapping, self.find_student_row, self.get_grade_cell = build_activity_mapping(self.file_path)
+                messagebox.showinfo("Archivo cargado", "Archivo cargado y mapeo generado correctamente.")
+                self.text_output.delete(1.0, tk.END)
+                self.text_output.insert(tk.END, "Mapeo de Tareas:\n")
+                for tarea, refs in self.mapping.items():
+                    self.text_output.insert(tk.END, f"  {tarea} -> {refs}\n")
+                # Llenar el combobox de tareas con los nombres detectados
+                self.combo_task['values'] = list(self.mapping.keys())
+                if self.mapping.keys():
+                    self.combo_task.current(0)
+            except Exception as e:
+                messagebox.showerror("Error", str(e))
 
-# Entrada para el nombre de la tarea
-tk.Label(root, text="Nombre de la Tarea:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
-entry_task = tk.Entry(root, width=30)
-entry_task.grid(row=2, column=1, padx=5, pady=5, sticky="w")
+    def search_cell(self):
+        if not self.file_path:
+            messagebox.showwarning("Advertencia", "Primero debe cargar un archivo Excel.")
+            return
+        alumno = self.entry_student.get().strip()
+        tarea = self.combo_task.get().strip()
+        trimester_str = self.combo_trimester.get().strip()
+        if not alumno or not tarea:
+            messagebox.showwarning("Advertencia", "Debe ingresar el nombre del alumno y seleccionar la tarea.")
+            return
 
-# Botón para verificar la nota
-tk.Button(root, text="Verificar Nota", command=verify_grade_for_student).grid(row=3, column=1, padx=5, pady=10)
+        # Convertir el trimestre a índice (1T -> 0, 2T -> 1, 3T -> 2)
+        trimester_index = 0
+        if trimester_str.upper() == "2T":
+            trimester_index = 1
+        elif trimester_str.upper() == "3T":
+            trimester_index = 2
 
-root.mainloop()
+        cell_ref = self.get_grade_cell(alumno, tarea, trimester_index)
+        if cell_ref:
+            # Para obtener el valor de la celda, cargar el workbook en modo data_only
+            wb = load_workbook(self.file_path, data_only=True)
+            ws = wb["EVALUACIÓN"]
+            grade_value = ws[cell_ref].value
+            self.text_output.insert(tk.END, f"\nCelda para '{alumno}' y '{tarea}' ({trimester_str}): {cell_ref}")
+            self.text_output.insert(tk.END, f"\nValor (nota): {grade_value}\n")
+        else:
+            messagebox.showerror("Error", f"No se pudo determinar la celda para '{alumno}' y '{tarea}'.")
+
+
+if __name__ == "__main__":
+    app = GradingGUI()
+    app.mainloop()
