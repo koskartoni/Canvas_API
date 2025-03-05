@@ -8,22 +8,24 @@ El objetivo de este proyecto es desarrollar un sistema que extraiga las califica
 
 1. **Identificación de la estructura del archivo Excel**  
    - **Hoja relevante:** `EVALUACIÓN`.
-   - **Alumnos:** Listados en la columna **C** a partir de la fila **10** (ordenados alfabéticamente).
-   - **Actividades:** Se encuentran en la fila **7**, agrupadas mediante celdas combinadas que contienen el texto  
+   - **Alumnos:** Listados en una columna específica (por defecto la **C**) a partir de la fila **10**.
+   - **Actividades/Tareas:** Se detectan en la fila de actividades (por defecto la **9**) agrupadas mediante celdas combinadas que contienen el encabezado  
      **"RESULTADO APRENDIZAJE-CRITERIO DE EVALUACIÓN PRÁCTICOS"**.
-   - **Notas de alumnos:** Ubicadas en la intersección entre la fila del alumno y la columna de la actividad.
 
-2. **Creación de la aplicación para identificación de celdas**  
-   Se desarrolló una interfaz gráfica con Tkinter que permite:
-   - Seleccionar el archivo de Excel.
-   - Introducir el nombre del alumno y de la actividad.
-   - Determinar la celda exacta donde se debe insertar la nota.
-   - Mostrar la referencia de la celda (por ejemplo, `AC10`) junto con su valor actual.
+2. **Desarrollo del Mapeo de Celdas**  
+   - Se implementó una función que recorre los bloques de celdas combinadas y, utilizando expresiones regulares, detecta automáticamente las actividades.  
+   - Se reconoce tanto el formato "TAREA X" como "ACTIVIDAD X" y se normaliza a **"TAREA X"** para homogeneizar la nomenclatura.
+   - Se construye un diccionario de mapeo que asocia cada tarea a una lista de referencias de celda (por ejemplo, `"TAREA 1": ["D9", "L9", "S9"]`).
+   - Se ordenan las referencias de cada tarea en orden ascendente según el índice de columna para que la celda más a la izquierda (primer trimestre) se utilice primero.
 
-3. **Correcciones y mejoras**  
-   - Se implementó el uso de `openpyxl` para manejar archivos **.xlsx**.
-   - Se corrigió la conversión de índices de columnas utilizando `get_column_letter()`, permitiendo trabajar con columnas más allá de "Z".
-   - Se incluyó el manejo de errores para casos en los que la celda no exista.
+3. **Verificación y Lectura de Valores**  
+   - Se implementó una interfaz gráfica con Tkinter que permite:
+     - Seleccionar el archivo Excel.
+     - Ingresar el nombre del alumno.
+     - Seleccionar la tarea mediante un combobox, que se rellena automáticamente con los nombres detectados.
+     - Elegir el trimestre (1T, 2T o 3T) mediante otro combobox.
+   - Al buscar la celda correspondiente, se obtiene la referencia de la celda correcta (basada en la posición del alumno y la tarea) y se lee el valor (la nota) usando openpyxl en modo `data_only`.
+
 
 ## Instalación y Requisitos
 
@@ -45,32 +47,41 @@ La aplicación utiliza el contenido textual de los encabezados para delimitar bl
 
 > "RESULTADO APRENDIZAJE-CRITERIO DE EVALUACIÓN PRÁCTICOS"
 
-El número de estas celdas combinadas varía según el curso:
+Dentro de cada bloque, en la fila 9 se encuentran los nombres de las tareas. La función de mapeo:
 
-- **Primer curso:** 3 trimestres.
-- **Segundo curso:** 2 trimestres.
-
+- Recorre cada bloque detectado..
+- Busca celdas que contengan expresiones como "TAREA X" o "ACTIVIDAD X", ignorando diferencias en mayúsculas o pequeños cambios de formato..
+- Normaliza el nombre a formato "TAREA X".
+- Almacena las referencias de celda correspondientes, ordenándolas de manera ascendente por el índice de columna (de izquierda a derecha).
 Dentro de cada bloque, en la fila **9** se encuentran los nombres específicos de las actividades. La función de mapeo recorre cada rango combinado que contenga el encabezado indicado, extrae de la fila **9** el nombre de cada actividad y genera un diccionario en el que se asocia cada actividad con la(s) referencia(s) de celda correspondiente(s).
 
 ### Ejemplo del Diccionario de Mapeo
 
 ```python
 {
-  "1 h": ["AC9", "AE9"],
-  "1K": ["AD9"],
-  "Tarea 1": ["AF9", "AH9"],
-  ...
+  "TAREA 1": ["D9", "L9", "S9"],
+  "TAREA 2": ["E9", "M9", "T9"],
+  "TAREA 3": ["F9", "N9", "U9"],
+  "TAREA 4": ["G9", "V9"],
+  "TAREA 5": ["W9"],
+  "TAREA 6": ["X9"],
+  "TAREA 7": ["Y9"],
+  "TAREA 8": ["Z9"]
 }
+
 ```
-## Verificación del Mapeo
+## VVerificación del Mapeo y Lectura de Notas
+La interfaz gráfica permite verificar la correspondencia entre alumno, tarea y nota:
 
-Se implementó un modo de verificación en la interfaz gráfica para confirmar la correspondencia entre alumno, tarea y nota:
+- Búsqueda del alumno:
+Se recorre la columna de alumnos (por defecto la C a partir de la fila 10) para localizar la fila donde se encuentra el nombre ingresado.
 
-### Búsqueda de la fila del alumno
-Se utiliza **pandas** para leer el Excel sin interpretar encabezados, de modo que los índices del DataFrame se correspondan directamente con las filas del Excel (por ejemplo, la fila `C10` se lee correctamente).
+- Selección de Tarea y Trimestre:
 
-### Verificación de la tarea
-Con el diccionario de mapeo obtenido, se reconstruye la referencia de celda en la que debe insertarse la nota para un alumno específico y se muestra el valor actual de esa celda. Esto permite comprobar que la lógica de mapeo es correcta y que, en el futuro, la inserción de datos provenientes de Canvas se realizará en la celda adecuada.
+   - La tarea se selecciona de un combobox con los nombres detectados en el Excel, evitando la necesidad de escribirla manualmente. 
+   - El trimestre se selecciona mediante otro combobox (con opciones "1T", "2T" y "3T"), y se utiliza para determinar cuál de las múltiples referencias de celda se debe usar.
+- Lectura de la Nota:
+Una vez determinada la celda, se vuelve a cargar el workbook en modo data_only para obtener el valor evaluado (la nota) y se muestra en la interfaz.
 
 ## Próximos Pasos
 
